@@ -1,0 +1,880 @@
+
+		name: Node.js CI
+on:
+push:
+branches: [ main, master ]
+pull_request:
+branches: [ main, master ]
+jobs:
+build:
+runs-on: ubuntu-latest
+steps:
+- uses: actions/checkout@v4
+- name: Use Node.js
+uses: actions/setup-node@v4
+with:
+node-version: '20'
+- run: npm ci
+- name: Generate Prisma Client
+run: npx prisma generate
+- name: Lint
+run: npm run lint --if-present
+- name: Run tests (none configured)
+run: echo "No tests configured"
+
+			
+# Copy to .env and set values
+# DATABASE_URL example (Postgres):
+# DATABASE_URL=postgresql://postgres:postgres@db:5432/locom?schema=public
+# or SQLite fallback:
+# DATABASE_URL=file:./dev.db
+DATABASE_URL=postgresql://postgres:postgres@db:5432/locom?schema=public
+JWT_SECRET=super_secret_jwt_key_here
+PORT=3000
+OPENAI_API_KEY=
+# Optional rate-limits
+FEED_CACHE_TTL_SECONDS=300
+FEED_RATE_LIMIT_SECONDS=10
+EXPOSE 3000
+ENV NODE_ENV=production
+CMD ["node", "server.js"]
+
+			
+			
+			
+			
+FROM node:20-alpine
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --production --silent || npm install --production --silent
+COPY . .
+RUN npx prisma generate
+EXPOSE 3000
+ENV NODE_ENV=production
+CMD ["node", "server.js"]
+			
+			
+			
+			version: '3.8'
+services:
+db:
+image: postgres:15-alpine
+restart: unless-stopped
+environment:
+POSTGRES_USER: postgres
+POSTGRES_PASSWORD: postgres
+POSTGRES_DB: locom
+volumes:
+- db-data:/var/lib/postgresql/data
+healthcheck:
+test: ["CMD-SHELL", "pg_isready -U postgres"]
+interval: 10s
+timeout: 5s
+retries: 5
+app:
+build: .
+depends_on:
+db:
+condition: service_healthy
+environment:
+- DATABASE_URL=postgresql://postgres:postgres@db:5432/locom?schema=public
+- JWT_SECRET=${JWT_SECRET}
+- OPENAI_API_KEY=${OPENAI_API_KEY}
+- PORT=3000
+ports:
+- "3000:3000"
+volumes:
+- ./:/app
+command: ["/bin/sh", "-c", "npx prisma migrate deploy --preview-feature &&
+node server.js"]
+volumes:
+db-data:
+			
+			
+			
+			
+"bcryptjs": "^2.4.3",
+"cheerio": "^1.0.0-rc.12",
+"express": "^4.18.2",
+"jsonwebtoken": "^9.0.0",
+"next": "13.5.6",
+"node-fetch": "^2.6.7",
+"openai": "^4.22.0",
+"prisma": "4.22.0",
+"react": "18.2.0",
+"react-dom": "18.2.0",
+"rss-parser": "^3.12.0",
+"socket.io": "^4.8.1",
+"socket.io-client": "^4.8.1",
+"@prisma/client": "4.22.0"
+}
+}
+{
+"name": "locom",
+"version": "1.1.0",
+"private": true,
+"scripts": {
+"dev": "node server.js",
+"build": "next build",
+"start": "NODE_ENV=production node server.js",
+"prisma:generate": "prisma generate",
+"prisma:migrate": "prisma migrate deploy",
+"lint": "next lint"
+},
+"dependencies": {
+
+
+generator client {
+ provider = "prisma-client-js"
+}
+datasource db {
+ provider = env("DATABASE_PROVIDER", "postgresql")
+ url = env("DATABASE_URL")
+}
+model User {
+ id Int @id @default(autoincrement())
+ email String @un>ique
+ password String
+ name String?
+ createdAt DateTime @default(now())
+ posts Post[]
+}
+model Post {
+ id Int @id @default(autoincrement())
+ authorId Int
+ author User @relation(fields: [authorId], references: [id])
+ content String @db.Text
+ createdAt DateTime @default(now())
+}
+model FeedCache {
+ id Int @id @default(autoincrement())
+ source String
+ url String
+ data Json
+ fetchedAt DateTime @default(now())
+ @@index([source, url])
+}
+
+			
+			
+			
+// custom server to enable Socket.io + Next.js and to run Prisma migrations on 
+startup
+const express = require('express');
+const next = require('next');
+const http = require('http');
+const { Server } = require('socket.io');
+const prismaLib = require('./lib/prisma-wrapper');
+const dev = process.env.NODE_ENV !== 'production';
+const app = next({ dev });
+const handle = app.getRequestHandler();
+const port = process.env.PORT || 3000;
+app.prepare().then(async () => {
+// ensure prisma generate/migrate when running in container or debug mode
+if (!dev) {
+try {
+// run migrations (deployed mode) - expects migrations already created
+const { execSync } = require('child_process');
+execSync('npx prisma migrate deploy', { stdio: 'inherit' });
+} catch (e) {
+console.warn('prisma migrate deploy failed or not configured:',
+e.message);
+}
+}
+const server = express();
+server.use(express.json());
+const httpServer = http.createServer(server);
+const io = new Server(httpServer, {
+cors: { origin: '*' }
+});
+// Socket.io: broadcast messages into rooms. We keep ephemeral chat only.
+io.on('connection', (socket) => {
+console.log('socket connected', socket.id);
+socket.on('joinRoom', (room) => {
+socket.join(room);
+});
+socket.on('message', (msg) => {
+if (msg && msg.room) {
+io.to(msg.room).emit('message', msg);
+}
+});
+socket.on('disconnect', () => {
+console.log('socket disconnected', socket.id);
+});
+});
+// Let Next handle all other routes
+server.all('*', (req, res) => handle(req, res));
+httpServer.listen(port, () => {
+console.log(`> Ready on http://localhost:${port}`);
+});
+});
+			
+			
+			
+			
+/** @type {import('next').NextConfig} */
+const nextConfig = { reactStrictMode: true, poweredByHeader: false };
+module.exports = nextConfig;
+
+
+
+			
+			
+			
+			
+# LOCOM
+LOCOM is a social / chat aggregator app. This repo includes JWT auth (Prisma + 
+Postgres), feed aggregation with caching, and Socket.io chat. Use Docker for 
+easiest setup.
+## Quick start (Docker)
+1. Copy `.env.example` to `.env` and set `JWT_SECRET` and optionally 
+`OPENAI_API_KEY`.
+2. `docker-compose up --build`
+3. Open http://localhost:3000
+## Quick start (local Postgres)
+1. Create a Postgres DB and set DATABASE_URL in `.env`.
+2. `npm install`
+3. `npx prisma generate`
+4. `npx prisma migrate dev --name init`
+5. `npm run dev`
+## Notes
+- Posts and users are stored in Postgres via Prisma.
+- Feed caching stored in `FeedCache` table.
+
+			
+			
+			
+			
+			
+import '../styles/globals.css';
+export default function App({ Component, pageProps }) {
+return <Component {...pageProps} />;
+}
+			
+			
+			
+import Link from 'next/link';
+export default function Home() {
+return (
+<div className="container">
+<div className="header">
+<h1>LOCOM</h1>
+<div>
+<Link href="/feed"><a style={{marginRight:12}}>Feed</a></Link>
+<Link href="/chatroom"><a>Chatroom</a></Link>
+</div>
+</div>
+<div className="card">
+<h2>Connect to the outside world</h2>
+<p className="small">View aggregated feeds, post updates, and join live
+chat rooms. Auth-required actions exist for posting.</p>
+<hr />
+<p>Quick links:</p>
+<ul>
+<li><Link href="/feed"><a>Feed & external sources</a></Link></li>
+<li><Link href="/chatroom"><a>Realtime Chatroom</a></Link></li>
+</ul>
+</div>
+</div>
+);
+}
+
+			
+			
+			
+import dynamic from 'next/dynamic';
+const Chat = dynamic(() => import('../components/Chat'), { ssr: false });
+export default function Chatroom() {
+return (
+<div className="container">
+<div className="header">
+<h1>LOCOM Chatroom</h1>
+</div>
+<div className="card"><Chat /></div>
+</div>
+);
+}
+			
+			
+			
+			
+			
+import { useEffect, useState } from 'react';
+import FeedList from '../components/FeedList';
+import PostForm from '../components/PostForm';
+export default function FeedPage() {
+const [feeds, setFeeds] = useState([]);
+const [posts, setPosts] = useState([]);
+const fetchFeeds = async () => {
+const res = await fetch('/api/feeds');
+const data = await res.json();
+setFeeds(data.feeds || []);
+};
+const fetchPosts = async () => {
+const res = await fetch('/api/posts');
+const data = await res.json();
+setPosts(data.posts || []);
+};
+useEffect(() => {
+fetchFeeds();
+fetchPosts();
+}, []);
+const handleNewPost = (p) => {
+setPosts([p, ...posts]);
+};
+return (
+<div className="container">
+<div className="header">
+<h1>LOCOM Feed</h1>
+</div>
+<div style={{display:'grid', gridTemplateColumns: '1fr 380px', gap:16}}>
+<div>
+<div className="card" style={{marginBottom:16}}>
+<h3>External feeds</h3>
+<FeedList feeds={feeds} />
+<button className="btn" onClick={fetchFeeds} style={{marginTop:12}}
+>Refresh</button>
+</div>
+<div className="card">
+<h3>Local posts</h3>
+{posts.length === 0 && <p className="small">No posts yet.</p>}
+{posts.map((p) => (
+<div key={p.id} className="feed-item">
+<strong>{p.authorName}</strong> · <span className="small">{new
+Date(p.createdAt).toLocaleString()}</span>
+<div>{p.content}</div>
+</div>
+))}
+</div>
+</div>
+<div>
+<div className="card">
+<h3>Post something</h3>
+<PostForm onPost={handleNewPost} />
+</div>
+<div className="card" style={{marginTop:16}}>
+<h3>Trusted sources</h3>
+<ul>
+<li>Daily Monitor (monitor.co.ug)</li>
+<li>MBU (mbu.ac.ug)</li>
+<li>Any RSS-enabled site — system tries RSS then scrapes HTML
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+);
+}
+			
+
+
+		
+			
+			
+			// POST /api/auth/login { email, password }
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const prisma = require('../../../lib/prisma-wrapper');
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret';
+export default async function handler(req, res) {
+if (req.method !== 'POST') return res.status(405).end();
+const { email, password } = req.body || {};
+if (!email || !password) return res.status(400).json({ error: 'email and 
+password required' });
+try {
+const user = await prisma.user.findUnique({ where: { email } });
+if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+const ok = await bcrypt.compare(password, user.password);
+if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+const token = jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
+expiresIn: '7d' });
+res.json({ ok: true, token, user: { id: user.id, email: user.email, name:
+user.name } });
+} catch (err) {
+console.error(err);
+res.status(500).json({ error: 'server error' });
+}
+}
+			
+			
+			
+			
+			
+// GET -> returns recent posts, POST -> creates a post (JWT optional)
+const prisma = require('../../lib/prisma-wrapper');
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'dev_jwt_secret';
+function getUserFromReq(req) {
+const h = req.headers && req.headers.authorization;
+if (!h) return null;
+const parts = h.split(' ');
+if (parts[0] !== 'Bearer') return null;
+try {
+const payload = jwt.verify(parts[1], JWT_SECRET);
+return payload;
+} catch (e) { return null }
+}
+export default async function handler(req, res) {
+if (req.method === 'GET') {
+const posts = await prisma.post.findMany({ orderBy: { createdAt: 'desc' },
+take: 50, include: { author: true } });
+const out = posts.map(p =>uh ({ id: p.id, content: p.content, createdAt:
+p.createdAt, authorId: p.authorId, authorName: p.author.name ||
+p.author.email }));
+return res.json({ posts: out });
+}
+if (req.method === 'POST') {
+const userPayload = getUserFromReq(req);
+if (!userPayload) return res.status(401).json({ error: 'Unauthorized. 
+Provide valid JWT in Authorization header' });
+const userId = userPayload.sub;
+const { content } = req.body || {};
+if (!content || !content.trim()) return res.status(400).json({ error:
+'content required' });
+try {
+const post = await prisma.post.create({ data: { authorId: userId,
+content } });
+const author = await prisma.user.findUnique({ where: { id: userId } });
+res.json({ post: { id: post.id, content: post.content, createdAt:
+post.createdAt, authorId, authorName: author.name || author.email } });
+} catch (err) {
+console.error(err);
+res.status(500).json({ error: 'server error' });
+}
+} else {
+res.status(405).end();
+}
+}
+
+				
+				
+				
+				
+import { fetchAggregatedFeeds } from '../../lib/feeds';
+export default async function handler(req, res) {
+try {
+const feeds = await fetchAggregatedFeeds();
+res.json({ ok: true, feeds });
+} catch (err) {
+console.error(err);
+res.status(500).json({ ok: false, error: err.message });
+}
+}
+
+				
+import { useEffect, useState } from 'react';
+import FeedList from '../components/FeedList';
+import PostForm from '../components/PostForm';
+export default function FeedPage() {
+const [feeds, setFeeds] = useState([]);
+const [posts, setPosts] = useState([]);
+const fetchFeeds = async () => {
+const res = await fetch('/api/feeds');
+const data = await res.json();
+setFeeds(data.feeds || []);
+};
+const fetchPosts = async () => {
+const res = await fetch('/api/posts');
+const data = await res.json();
+setPosts(data.posts || []);
+};
+useEffect(() => {
+fetchFeeds();
+fetchPosts();
+}, []);
+const handleNewPost = (p) => {
+setPosts([p, ...posts]);
+};
+return (
+<div className="container">
+<div className="header">
+<h1>LOCOM Feed</h1>
+</div>
+<div style={{display:'grid', gridTemplateColumns: '1fr 380px', gap:16}}>
+<div>
+<div className="card" style={{marginBottom:16}}>
+<h3>External feeds</h3>
+<FeedList feeds={feeds} />
+<button className="btn" onClick={fetchFeeds} style={{marginTop:12}}
+>Refresh</button>
+</div>
+<div className="card">
+<h3>Local posts</h3>
+{posts.length === 0 && <p className="small">No posts yet.</p>}
+{posts.map((p) => (
+<div key={p.id} className="feed-item">
+<strong>{p.authorName}</strong> · <span className="small">{new
+Date(p.createdAt).toLocaleString()}</span>
+<div>{p.content}</div>
+</div>
+))}
+</div>
+</div>
+<div>
+<div className="card">
+<h3>Post something</h3>
+<PostForm onPost={handleNewPost} />
+</div>
+<div className="card" style={{marginTop:16}}>
+<h3>Trusted sources</h3>
+<ul>
+<li>Daily Monitor (monitor.co.ug)</li>
+<li>MBU (mbu.ac.ug)</li>
+<li>Any RSS-enabled site — system tries RSS then scrapes HTML
+</li>
+</ul>
+</div>
+</div>
+</div>
+</div>
+);
+}
+				
+				
+			
+			
+			
+import { aiReply } from '../../lib/ai';
+export default async function handler(req, res) {
+try {
+const body = req.body || {};
+const reply = await aiReply(body);
+res.json({ ok: true, reply });
+} catch (err) {
+console.error(err);
+res.status(500).json({ ok: false, error: err.message });
+}
+}
+			
+			
+			
+export default function FeedList({ feeds = [] }) {
+if (!feeds || feeds.length === 0) return <p className="small">No external
+feed items available.</p>;
+return (
+<div>
+{feeds.map((item, idx) => (
+<div key={idx} className="feed-item">
+<a href={item.link} target="_blank"
+rel="noreferrer"><strong>{item.title}</strong></a>
+<div className="small">{item.source} · {new Date(item.isoDate ||
+item.pubDate || Date.now()).toLocaleString()}</div>
+<p>{item.contentSnippet || item.content || ''}</p>
+</div>
+))}
+</div>
+);
+}
+			
+			
+			
+			
+			
+			
+import { useState } from 'react';
+export default function >PostForm({ onPost }) {
+const [email, setEmail] = useState('');
+const [token, setToken] = useState('');
+const [content, setContent] = useState('');
+const [busy, setBusy] = useState(false);
+// This demo supports posting as authenticated user by providing a JWT token
+const submit = async (e) => {
+e.preventDefault();
+if (!content.trim()) return;
+setBusy(true);
+try {
+const headers = { 'Content-Type': 'application/json' };
+if (token) headers['Authorization'] = `Bearer ${token}`;
+const res = await fetch('/api/posts', {
+method: 'POST',
+headers,
+body: JSON.stringify({ content })
+});
+const data = await res.json();
+if (data.post) onPost(data.post);
+setContent('');
+} catch (err) {
+console.error(err);
+alert('Failed to post');
+} finally {
+setBusy(false);
+}
+};
+return (
+<form onSubmit={submit}>
+<div style={{marginBottom:8}}>
+<input placeholder="JWT token (optional)" value={token}
+onChange={e=>setToken(e.target.value)} style={{width:'100%', padding:8,
+borderRadius:8}} />
+</div>
+<div style={{marginBottom:8}}>
+<textarea placeholder="What's happening?" value={content}
+onChange={e=>setContent(e.target.value)} style={{width:'100%', padding:8,
+borderRadius:8, minHeight:80}} />
+</div>
+<div>
+<button className="btn" disabled={busy}>{busy ? 'Posting...' : 'Post'}</
+button>
+</div>
+</form>
+);
+}
+			
+			
+			
+			
+			
+import { useEffect, useRef, useState } from 'react';
+import io from 'socket.io-client';
+let socket;
+export default function Chat() {
+const [room, setRoom] = useState('global');
+const [user, setUser] = useState('');
+const [text, setText] = useState('');
+const [messages, setMessages] = useState([]);
+const messagesRef = useRef();
+useEffect(() => {
+socket = io(undefined, { autoConnect: true });
+socket.on('connect', () => {
+socket.emit('joinRoom', room);
+});
+socket.on('message', (msg) => setMessages(prev => [...prev, msg]));
+return () => socket.disconnect();
+}, []);
+useEffect(() => {
+if (socket && socket.connected) socket.emit('joinRoom', room);
+}, [room]);
+const send = () => {
+if (!text.trim()) return;
+const msg = { room, user: user || 'Anonymous', text, ts: Date.now() };
+socket.emit('message', msg);
+setText('');
+setMessages(prev => [...prev, msg]);
+};
+return (
+<div>
+<div style={{marginBottom:12}}>
+<input placeholder="Your name" value={user}
+onChange={(e)=>setUser(e.target.value)} style={{padding:8, borderRadius:8}} />
+<select value={room} onChange={e=>setRoom(e.target.value)}
+style={{marginLeft:12, padding:8, borderRadius:8}}>
+<option value="global">global</option>
+<option value="news">news</option>
+<option value="local">local</option>
+</select>
+</div>
+<div style={{height:320, overflowY:'auto', border:'1px solid #eee',
+padding:8, borderRadius:8, marginBottom:8}} ref={messagesRef}>
+{messages.map((m, i) => (
+<div key={i} style={{padding:6, borderBottom:'1px solid #f2f2f2'}}>
+<strong>{m.user}</strong> <span className="small">· {new
+Date(m.ts).toLocaleTimeString()}</span>
+<div>{m.text}</div>
+</div>
+))}
+</div>
+<div style={{display:'flex', gap:8}}>
+<input value={text} onChange={(e)=>setText(e.target.value)}
+placeholder="Say something..." style={{flex:1, padding:8, borderRadius:8}} />
+<button className="btn" onClick={send}>Send</button>
+</div>
+</div>
+);
+}
+			
+			
+			
+			
+			
+// hardened feed aggregation with caching in DB and simple rate-limiting
+const Parser = require('rss-parser');
+const fetch = require('node-fetch');
+const cheerio = require('cheerio');
+const prisma = require('./prisma-wrapper');
+const parser = new Parser({ timeout: 10000 });
+const FEED_CACHE_TTL = parseInt(process.env.FEED_CACHE_TTL_SECONDS || '300',
+10); // 5min
+const FEED_RATE_LIMIT = parseInt(process.env.FEED_RATE_LIMIT_SECONDS || '10',
+10); // 10s between fetches per source
+// sources list — add more entries here as needed
+const SOURCES = [
+{ name: 'Daily Monitor', url: 'https://www.monitor.co.ug', rss: 'https://
+www.monitor.co.ug/uganda/news/rss.xml' },
+{ name: 'MBU', url: 'https://mbu.ac.ug', rss: 'https://mbu.ac.ug/feed' },
+{ name: 'BBC', url: 'https://www.bbc.com', rss: 'https://feeds.bbci.co.uk/
+news/rss.xml' },
+{ name: 'The Guardian', url: 'https://www.theguardian.com', rss: 'https://
+www.theguardian.com/world/rss' }
+];
+// keep last fetch timestamp in memory to avoid hammering sources (also we store 
+cache in DB)
+const lastFetch = {};
+async function tryFetchRSS(rssUrl) {
+try {
+const feed = await parser.parseURL(rssUrl);
+return (feed.items || []).map(i => ({ ...i }));
+} catch (e) {
+return null;
+}
+}
+async function scrapeListFromSite(siteUrl) {
+try {
+const res = await fetch(siteUrl);
+const html = await res.text();
+const $ = cheerio.load(html);
+const items = [];
+$('article a, .article a, .post a, h3 a, h2 a').each((i, el) => {
+const a = $(el);
+const href = a.attr('href');
+const title = a.text().trim();
+if (href && title && title.length > 10) {
+items.push({ title, link: href.startsWith('http') ? href : new
+URL(href, siteUrl).toString(), source: siteUrl });
+}
+});
+if (items.length === 0) {
+$('a').each((i, el) => {
+const a = $(el); const title = a.text().trim(); const href =
+a.attr('href');
+if (href && title && title.length > 30) items.push({ title, link:
+href.startsWith('http') ? href : new URL(href, siteUrl).toString(), source:
+siteUrl });
+});
+}
+return items.slice(0, 20);
+} catch (err) {
+console.warn('Scrape failed for', siteUrl, err && err.message);
+return [];
+}
+}
+async function getCachedFeed(source, url) {
+const rec = await prisma.feedCache.findFirst({ where: { source, url } });
+if (!rec) return null;
+const age = (Date.now() - new Date(rec.fetchedAt).getTime())/1000;
+if (age > FEED_CACHE_TTL) return null;
+return rec.data;
+}
+async function setCachedFeed(source, url, data) {
+const existing = await prisma.feedCache.findFirst({ where: { source, url } });
+if (existing) {
+return prisma.feedCache.update({ where: { id: existing.id }, data: { data,
+fetchedAt: new Date() } });
+}
+return prisma.feedCache.create({ data: { source, url, data } });
+}
+async function fetchAggregatedFeeds() {
+const all = [];
+for (const src of SOURCES) {
+const key = src.name;
+const since = lastFetch[key] || 0;
+if (Date.now() - since < FEED_RATE_LIMIT * 1000) {
+// use DB cache if available
+const cached = await getCachedFeed(src.name, src.rss || src.url);
+if (cached) {
+all.push(...cached);
+continue;
+}
+}
+let items = [];
+if (src.rss) {
+const rssItems = await tryFetchRSS(src.rss);
+if (rssItems && rssItems.length) {
+items = rssItems.map(it => ({ ...it, source: src.name }));
+}
+}
+if (items.length === 0) {
+const scraped = await scrapeListFromSite(src.url);
+items = scraped.map(it => ({ ...it, source: src.name }));
+}
+// normalize and cache
+const normalized = items.slice(0, 15).map(it => ({ title: it.title, link:
+it.link || it.enclosure?.url || '', contentSnippet: it.contentSnippet ||
+it.content || '', isoDate: it.isoDate || it.pubDate, source: src.name }));
+await setCachedFeed(src.name, src.rss || src.url, normalized);
+lastFetch[key] = Date.now();
+all.push(...normalized);
+}
+all.sort((a,b) => {
+const ta = a.isoDate ? new Date(a.isoDate).getTime() : 0;
+const tb = b.isoDate ? new Date(b.isoDate).getTime() : 0;
+return tb - ta;
+});
+return all.slice(0, 100);
+}
+module.exports = { fetchAggregatedFeeds };
+exports.fetchAggregatedFeeds = fetchAggregatedFeeds;
+			
+			
+			
+			
+const OPENAI_KEY = process.env.OPENAI_API_KEY;
+let OpenAI;
+if (OPENAI_KEY) {
+try { OpenAI = require('openai'); } catch (e) { OpenAI = null; }
+}
+async function aiReply(body) {
+if (OPENAI_KEY && OpenAI) {
+const client = new OpenAI.OpenAI({ apiKey: OPENAI_KEY });
+const messages = body.messages || [];
+const chatText = messages.map(m => `${m.user}: ${m.text}`).join('\n');
+const prompt = `You are LOCOM assistant. Provide a short (2-3 sentences) 
+friendly summary or reply to the conversation below. Conversation:\n\n$
+{chatText}`;
+const resp = await client.chat.completions.create({ model: 'gpt-4o-mini',
+messages: [{ role: 'user', content: prompt }], max_tokens: 200 });
+const content = resp.choices && resp.choices[0] && resp.choices[0].message
+&& resp.choices[0].message.content;
+return content || 'Sorry, no reply.';
+} else {
+const messages = body.messages || [];
+if (!messages.length) return 'No messages to summarize.';
+const last = messages.slice(-3);
+const users = Array.from(new Set(last.map(m => m.user))).join(', ');
+const summary = `Recent messages by ${users}: ` + last.map(m => `${m.user}: 
+${m.text}`).join(' / ');
+return summary.slice(0, 600);
+}
+}
+module.exports = { aiReply };
+exports.aiReply = aiReply;
+<
+			
+			
+			
+			 (runs once to ensure client generation in dev)
+// run this script after installing to generate Prisma client in some 
+environments
+const { execSync } = require('child_process');
+try {
+execSync('npx prisma generate', { stdio: 'inherit' });
+console.log('prisma client generated');
+} catch (e) {
+console.error('prisma generate failed', e);
+}
+			
+			
+			
+			
+			
+			
+			
+html,body,#__next{height:100%}
+body{margin:0;font-family:Inter,system-ui,Segoe
+UI,Roboto,Helvetica,Arial;background:#f6f8fb;color:#111827}
+.container{max-width:1000px;margin:24px auto;padding:16px}
+.header{display:flex;align-items:center;justify-content:space-between;marginbottom:16px}
+.card{background:white;border-radius:12px;box-shadow:0 4px 18px rgba(16,24,40,
+0.06);padding:16px}
+.feed-item{padding:8px 0;border-bottom:1px solid #eee}
+.input, textarea, button{font-family:inherit}
+.btn{display:inline-block;padding:8px 12px;border-radius:
+8px;background:#2563eb;color:white;border:none;cursor:pointer}
+.small{font-size:0.9rem}
+			
+			
+			
+			
+			
+</body>
+</html>
