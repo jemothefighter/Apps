@@ -1,0 +1,13 @@
+
+html,body,#__next{height:100%}
+body{margin:0;font-family:Inter,system-ui,Segoe
+UI,Roboto,Helvetica,Arial;background:#f6f8fb;color:#111827}
+.container{max-width:1000px;margin:24px auto;padding:16px}
+.header{display:flex;align-items:center;justify-content:space-between;marginbottom:16px}
+.card{background:white;border-radius:12px;box-shadow:0 4px 18px rgba(16,24,40,
+0.06);padding:16px}
+.feed-item{padding:8px 0;border-bottom:1px solid #eee}
+.input, textarea, button{font-family:inherit}
+.btn{display:inline-block;padding:8px 12px;border-radius:
+8px;background:#2563eb;color:white;border:none;cursor:pointer}
+.small{font-size:0.9rem}

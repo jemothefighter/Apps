@@ -16,4 +16,4 @@ easiest setup.
 5. `npm run dev`
 ## Notes
 - Posts and users are stored in Postgres via Prisma.
-- Feed caching stored in `FeedCache` table.
+- Feed caching stored in `FeedCache` table.

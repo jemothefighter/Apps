@@ -1,0 +1,31 @@
+"bcryptjs": "^2.4.3",
+"cheerio": "^1.0.0-rc.12",
+"express": "^4.18.2",
+"jsonwebtoken": "^9.0.0",
+"next": "13.5.6",
+"node-fetch": "^2.6.7",
+"openai": "^4.22.0",
+"prisma": "4.22.0",
+"react": "18.2.0",
+"react-dom": "18.2.0",
+"rss-parser": "^3.12.0",
+"socket.io": "^4.8.1",
+"socket.io-client": "^4.8.1",
+"@prisma/client": "4.22.0"
+}
+}
+{
+"name": "locom",
+"version": "1.1.0",
+"private": true,
+"scripts": {
+"dev": "node server.js",
+"build": "next build",
+"start": "NODE_ENV=production node server.js",
+"prisma:generate": "prisma generate",
+"prisma:migrate": "prisma migrate deploy",
+"lint": "next lint"
+},
+"dependencies": {
+
+
